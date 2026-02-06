@@ -22,6 +22,7 @@ type Processor interface {
     Process(ctx context.Context, event restate.PodEvent)
     Run(ctx context.Context)
     CleanupLoop(ctx context.Context)
+    GetMetadata(podName string) (projectID, workloadID string, ok bool)
 }
 ```
 
@@ -38,7 +39,8 @@ The `Manager` is the default implementation of `Watcher`. It orchestrates the li
 The `EventProcessor` handles all event logic post-capture.
 - **Filtering**: Only processes specific pod failure reasons (e.g., `CrashLoopBackOff`, `OOMKilled`).
 - **Deduplication**: Uses a `sync.Map` to prevent flooding the backend with repetitive events for the same container.
-- **Batching**: Buffers events and flushes them in batches (configured by `batch_size` and `batch_flush`) or when a timer expires.
+- **Parallel Batching**: Buffers events and flushes them in parallel using goroutines to ensure the main processing loop never blocks on network I/O.
+- **Metadata Caching**: Extracts and stores `project-id` and `workload-id` from pod labels into a high-performance concurrent cache.
 - **Audit Logging**: Generates high-fidelity JSON logs for every event processed, including a SHA-256 payload hash for traceability.
 - **Thread Safety**: Uses `sync.RWMutex` to allow safe dynamic configuration updates (like changing batch sizes or cooldowns) without restarting the service.
 
@@ -47,6 +49,7 @@ The `EventProcessor` handles all event logic post-capture.
 - `Run(ctx)`: Starts the main orchestration loops (processor, cleanup, config sync).
 - `handlePodEvent(...)`: Maps raw Kubernetes objects into structured `PodEvent` payloads.
 - `ApplyRemoteConfig(cfg)`: Hot-swaps processing parameters at runtime.
+- `GetMetadata(podName)`: Retrieves cached project and workload identifiers for telemetry enrichment.
 
 ## Metrics
 

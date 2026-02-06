@@ -14,10 +14,16 @@ import (
 	"go.uber.org/zap"
 )
 
+type PodMetadata struct {
+	ProjectID  string
+	WorkloadID string
+}
+
 type EventProcessor struct {
 	restateClient  restate.IRestateClient
 	log            *zap.SugaredLogger
 	dedupMap       sync.Map
+	metadataMap    sync.Map // Cache for pod metadata (ProjectID, WorkloadID)
 	cooldown       time.Duration
 	batchSize      int
 	batchFlush     time.Duration
@@ -32,6 +38,7 @@ type Processor interface {
 	Process(ctx context.Context, event restate.PodEvent)
 	Run(ctx context.Context)
 	CleanupLoop(ctx context.Context)
+	GetMetadata(podName string) (projectID, workloadID string, ok bool)
 }
 
 func NewEventProcessor(rc restate.IRestateClient, log *zap.SugaredLogger, cooldown time.Duration) *EventProcessor {
@@ -80,6 +87,16 @@ func (p *EventProcessor) ApplyRemoteConfig(cfg *restate.RemoteConfig) {
 }
 
 func (p *EventProcessor) Process(ctx context.Context, event restate.PodEvent) {
+	// Extract metadata from labels if available
+	projectID := event.Labels["project-id"]
+	workloadID := event.Labels["workload-id"]
+	if projectID != "" || workloadID != "" {
+		p.metadataMap.Store(event.Name, PodMetadata{
+			ProjectID:  projectID,
+			WorkloadID: workloadID,
+		})
+	}
+
 	if !p.shouldProcess(event) {
 		return
 	}
@@ -105,6 +122,14 @@ func (p *EventProcessor) Process(ctx context.Context, event restate.PodEvent) {
 	}
 }
 
+func (p *EventProcessor) GetMetadata(podName string) (projectID, workloadID string, ok bool) {
+	if val, found := p.metadataMap.Load(podName); found {
+		meta := val.(PodMetadata)
+		return meta.ProjectID, meta.WorkloadID, true
+	}
+	return "", "", false
+}
+
 func (p *EventProcessor) Run(ctx context.Context) {
 	p.mu.RLock()
 	currentFlush := p.batchFlush
@@ -119,16 +144,24 @@ func (p *EventProcessor) Run(ctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
+
+		// parallel notifications to avoid blocking the main loop
+		var wg sync.WaitGroup
 		for _, ev := range batch {
-			status := "success"
-			err := p.restateClient.NotifyPodEvent(ctx, ev)
-			if err != nil {
-				p.log.Errorw("failed to notify restate", "err", err, "pod", ev.Name)
-				status = "error"
-			}
-			p.auditLog(ev, status)
-			metrics.QueueDepth.Dec()
+			wg.Add(1)
+			go func(e restate.PodEvent) {
+				defer wg.Done()
+				status := "success"
+				err := p.restateClient.NotifyPodEvent(ctx, e)
+				if err != nil {
+					p.log.Errorw("failed to notify restate", "err", err, "pod", e.Name)
+					status = "error"
+				}
+				p.auditLog(e, status)
+				metrics.QueueDepth.Dec()
+			}(ev)
 		}
+		wg.Wait()
 		batch = batch[:0]
 	}
 
