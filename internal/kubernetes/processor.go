@@ -17,6 +17,7 @@ import (
 type PodMetadata struct {
 	ProjectID  string
 	WorkloadID string
+	LastSeen   time.Time
 }
 
 type EventProcessor struct {
@@ -41,12 +42,12 @@ type Processor interface {
 	GetMetadata(podName string) (projectID, workloadID string, ok bool)
 }
 
-func NewEventProcessor(rc restate.IRestateClient, log *zap.SugaredLogger, cooldown time.Duration) *EventProcessor {
+func NewEventProcessor(rc restate.IRestateClient, log *zap.SugaredLogger, cooldown time.Duration, batchSize int) *EventProcessor {
 	return &EventProcessor{
 		restateClient: rc,
 		log:           log,
 		cooldown:      cooldown,
-		batchSize:     50,
+		batchSize:     batchSize,
 		batchFlush:    time.Second,
 		eventChan:     make(chan restate.PodEvent, 1000),
 		enabledReasons: map[string]bool{
@@ -94,6 +95,7 @@ func (p *EventProcessor) Process(ctx context.Context, event restate.PodEvent) {
 		p.metadataMap.Store(event.Name, PodMetadata{
 			ProjectID:  projectID,
 			WorkloadID: workloadID,
+			LastSeen:   time.Now(),
 		})
 	}
 
@@ -145,23 +147,20 @@ func (p *EventProcessor) Run(ctx context.Context) {
 			return
 		}
 
-		// parallel notifications to avoid blocking the main loop
-		var wg sync.WaitGroup
-		for _, ev := range batch {
-			wg.Add(1)
-			go func(e restate.PodEvent) {
-				defer wg.Done()
-				status := "success"
-				err := p.restateClient.NotifyPodEvent(ctx, e)
-				if err != nil {
-					p.log.Errorw("failed to notify restate", "err", err, "pod", e.Name)
-					status = "error"
-				}
-				p.auditLog(e, status)
-				metrics.QueueDepth.Dec()
-			}(ev)
+		// Send batch to Restate
+		status := "success"
+		err := p.restateClient.NotifyPodEvents(ctx, batch)
+		if err != nil {
+			p.log.Errorw("failed to notify restate batch", "err", err, "batch_size", len(batch))
+			status = "error"
 		}
-		wg.Wait()
+
+		// Log and update metrics for each event in the batch
+		for _, ev := range batch {
+			p.auditLog(ev, status)
+			metrics.QueueDepth.Dec()
+		}
+
 		batch = batch[:0]
 	}
 
@@ -237,6 +236,15 @@ func (p *EventProcessor) CleanupLoop(ctx context.Context) {
 			p.dedupMap.Range(func(key, value interface{}) bool {
 				if time.Since(value.(time.Time)) > currentCooldown*2 {
 					p.dedupMap.Delete(key)
+				}
+				return true
+			})
+
+			// Clean up metadata map for pods not seen in 6 hours
+			p.metadataMap.Range(func(key, value interface{}) bool {
+				meta := value.(PodMetadata)
+				if time.Since(meta.LastSeen) > 6*time.Hour {
+					p.metadataMap.Delete(key)
 				}
 				return true
 			})

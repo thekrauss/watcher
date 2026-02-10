@@ -1,0 +1,10 @@
+# Restate Watcher Configuration (Alternative Location)
+
+restate_url: "http://restate:8080"
+cluster_id: "my-kubernetes-cluster"
+watch_namespace_mode: "single"
+watch_namespace: "default"
+http_listen: ":8080"
+restate_timeout: "5s"
+remote_config_fetch: "5m"
+batch_size: 100

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -45,7 +44,7 @@ func NewManager(cfg config.Config, rc restate.IRestateClient, log *zap.SugaredLo
 		return nil, fmt.Errorf("create kubernetes client: %w", err)
 	}
 
-	processor := NewEventProcessor(rc, log, 3*time.Minute)
+	processor := NewEventProcessor(rc, log, 3*time.Minute, cfg.BatchSize)
 
 	return &Manager{
 		cfg:           cfg,
@@ -74,17 +73,91 @@ func (m *Manager) Run(ctx context.Context) error {
 		return nil
 	}
 
-	// Label mode: Dynamic discovery of namespaces
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	// Label mode: Dynamic discovery of namespaces via Informer
+	m.startNamespaceDiscoveryInformer(ctx)
+	<-ctx.Done()
+	return nil
+}
 
-	for {
-		m.discoverNamespaces(ctx)
-		select {
-		case <-ticker.C:
-		case <-ctx.Done():
-			return nil
-		}
+func (m *Manager) startNamespaceDiscoveryInformer(ctx context.Context) {
+	factory := informers.NewSharedInformerFactory(m.clientset, 10*time.Minute)
+	nsInformer := factory.Core().V1().Namespaces().Informer()
+
+	labelKey := m.cfg.ManagedNSLabel
+
+	nsInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			ns, ok := obj.(*corev1.Namespace)
+			if !ok {
+				return
+			}
+			if ns.Labels[labelKey] == "true" {
+				m.ensureNamespaceWatcher(ctx, ns.Name)
+			}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			newNS, ok := newObj.(*corev1.Namespace)
+			if !ok {
+				return
+			}
+			oldNS, ok := oldObj.(*corev1.Namespace)
+			if !ok {
+				return
+			}
+
+			// Check if label was added or removed
+			isManagedNow := newNS.Labels[labelKey] == "true"
+			wasManaged := oldNS.Labels[labelKey] == "true"
+
+			if isManagedNow && !wasManaged {
+				m.ensureNamespaceWatcher(ctx, newNS.Name)
+			} else if !isManagedNow && wasManaged {
+				m.stopNamespaceWatcher(newNS.Name)
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			ns, ok := obj.(*corev1.Namespace)
+			if !ok {
+				// Handle DeletedFinalStateUnknown
+				if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+					if ns, ok = tombstone.Obj.(*corev1.Namespace); ok {
+						m.stopNamespaceWatcher(ns.Name)
+					}
+				}
+				return
+			}
+			m.stopNamespaceWatcher(ns.Name)
+		},
+	})
+
+	go factory.Start(ctx.Done())
+	if !cache.WaitForCacheSync(ctx.Done(), nsInformer.HasSynced) {
+		m.log.Error("failed to sync namespace discovery cache")
+		return
+	}
+	m.log.Infow("namespace discovery informer started", "label", labelKey)
+}
+
+func (m *Manager) ensureNamespaceWatcher(ctx context.Context, namespace string) {
+	m.informerMu.Lock()
+	defer m.informerMu.Unlock()
+
+	if _, ok := m.informers[namespace]; !ok {
+		m.log.Infow("starting watcher for new namespace", "namespace", namespace)
+		nsCtx, cancel := context.WithCancel(ctx)
+		m.informers[namespace] = cancel
+		go m.startNamespaceInformer(nsCtx, namespace)
+	}
+}
+
+func (m *Manager) stopNamespaceWatcher(namespace string) {
+	m.informerMu.Lock()
+	defer m.informerMu.Unlock()
+
+	if cancel, ok := m.informers[namespace]; ok {
+		m.log.Infow("stopping watcher for namespace", "namespace", namespace)
+		cancel()
+		delete(m.informers, namespace)
 	}
 }
 
@@ -108,40 +181,6 @@ func (m *Manager) configSyncLoop(ctx context.Context) {
 				continue
 			}
 			m.processor.ApplyRemoteConfig(cfg)
-		}
-	}
-}
-
-func (m *Manager) discoverNamespaces(ctx context.Context) {
-	selector := fmt.Sprintf("%s=true", m.cfg.ManagedNSLabel)
-	nsList, err := m.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil {
-		m.log.Errorw("failed to list namespaces", "selector", selector, "err", err)
-		return
-	}
-
-	m.informerMu.Lock()
-	defer m.informerMu.Unlock()
-
-	activeNS := make(map[string]bool)
-	for _, ns := range nsList.Items {
-		activeNS[ns.Name] = true
-		if _, ok := m.informers[ns.Name]; !ok {
-			m.log.Infow("starting watcher for new namespace", "namespace", ns.Name)
-			nsCtx, cancel := context.WithCancel(ctx)
-			m.informers[ns.Name] = cancel
-			go m.startNamespaceInformer(nsCtx, ns.Name)
-		}
-	}
-
-	// Stop informers for namespaces no longer managed
-	for ns, cancel := range m.informers {
-		if !activeNS[ns] {
-			m.log.Infow("stopping watcher for namespace", "namespace", ns)
-			cancel()
-			delete(m.informers, ns)
 		}
 	}
 }
@@ -213,7 +252,8 @@ func (m *Manager) toPodEvent(eventType string, pod *corev1.Pod) restate.PodEvent
 	}
 
 	return restate.PodEvent{
-		EventID:       fmt.Sprintf("%s-%d", pod.UID, time.Now().UnixNano()),
+		// Use UID, ResourceVersion and Reason to create a deterministic EventID for idempotency
+		EventID:       fmt.Sprintf("%s-%s-%s", pod.UID, pod.ResourceVersion, reason),
 		Namespace:     pod.Namespace,
 		Name:          pod.Name,
 		Phase:         string(pod.Status.Phase),

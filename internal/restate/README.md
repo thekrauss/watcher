@@ -4,19 +4,20 @@ The `restate` package provides the client and data structures for communicating 
 
 ## Client Interface
 
-The package defines a `Client` interface to allow for easy mocking and testing of the backend integration:
+The package defines a `IRestateClient` interface to allow for easy mocking and testing of the backend integration:
 
 ```go
-type Client interface {
+type IRestateClient interface {
     Enroll(ctx context.Context) error
     GetRemoteConfig(ctx context.Context) (*RemoteConfig, error)
     NotifyPodEvent(ctx context.Context, event PodEvent) error
+    NotifyPodEvents(ctx context.Context, events []PodEvent) error
 }
 ```
 
 ## RestateClient
 
-The `RestateClient` is the default implementation of the `Client` interface. It is a resilient HTTP client designed for high-availability event delivery.
+The `RestateClient` is the default implementation of the `IRestateClient` interface. It is a resilient HTTP client designed for high-availability event delivery.
 
 ### Resilience Features
 
@@ -28,7 +29,8 @@ The `RestateClient` is the default implementation of the `Client` interface. It 
 
 - `Enroll(ctx)`: Registers the cluster with its `cluster_id` and version.
 - `GetRemoteConfig(ctx)`: Fetches dynamic processing parameters from the management layer.
-- `NotifyPodEvent(ctx, event)`: Sends a batch of pod events to the Restate service.
+- `NotifyPodEvent(ctx, event)`: Sends a single pod event to the Restate service.
+- `NotifyPodEvents(ctx, events)`: Sends a batch of pod events to the Restate service.
 
 ## Data Models
 

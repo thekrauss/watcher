@@ -30,8 +30,8 @@ type Processor interface {
 
 ### 1. Manager (`watcher.go`)
 The `Manager` is the default implementation of `Watcher`. It orchestrates the lifecycle of Kubernetes watchers.
-- **Dynamic Namespace Discovery**: When `watch_namespace_mode` is set to `label`, it periodically scans the cluster for namespaces matching a specific label and dynamically starts/stops informers.
-- **Shared Informers**: Uses `client-go` informers for efficient, cached access to Kubernetes resources.
+- **Dynamic Namespace Discovery**: When `watch_namespace_mode` is set to `label`, it uses a Shared Informer to monitor namespace events and dynamically starts/stops watchers for namespaces matching the specified label.
+- **Shared Informers**: Uses `client-go` informers for efficient, event-driven access to Kubernetes resources.
 - **Config Sync**: Runs a background loop to fetch remote configuration from Restate and apply it to the processor at runtime.
 - **Cluster Enrollment**: Automatically registers the cluster with the Restate backend on startup.
 
@@ -39,8 +39,8 @@ The `Manager` is the default implementation of `Watcher`. It orchestrates the li
 The `EventProcessor` handles all event logic post-capture.
 - **Filtering**: Only processes specific pod failure reasons (e.g., `CrashLoopBackOff`, `OOMKilled`).
 - **Deduplication**: Uses a `sync.Map` to prevent flooding the backend with repetitive events for the same container.
-- **Parallel Batching**: Buffers events and flushes them in parallel using goroutines to ensure the main processing loop never blocks on network I/O.
-- **Metadata Caching**: Extracts and stores `project-id` and `workload-id` from pod labels into a high-performance concurrent cache.
+- **Batch Processing**: Buffers events and flushes them in batches to the backend to reduce network overhead and improve throughput.
+- **Metadata Caching**: Extracts and stores `project-id` and `workload-id` from pod labels into a high-performance concurrent cache with automatic TTL-based cleanup.
 - **Audit Logging**: Generates high-fidelity JSON logs for every event processed, including a SHA-256 payload hash for traceability.
 - **Thread Safety**: Uses `sync.RWMutex` to allow safe dynamic configuration updates (like changing batch sizes or cooldowns) without restarting the service.
 

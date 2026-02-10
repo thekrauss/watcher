@@ -21,6 +21,7 @@ type Config struct {
 	RestateCallTimeout time.Duration `mapstructure:"restate_timeout"`
 	RemoteConfigURL    string        `mapstructure:"remote_config_url"`
 	RemoteConfigFetch  time.Duration `mapstructure:"remote_config_fetch"`
+	BatchSize          int           `mapstructure:"batch_size"`
 }
 
 const (
@@ -42,6 +43,7 @@ func Load() (Config, error) {
 	pflag.Duration("restate-timeout", defaultRestateTimeout, "Timeout for Restate calls")
 	pflag.String("remote-config-url", "", "URL to fetch remote configuration from")
 	pflag.Duration("remote-config-fetch", defaultRemoteConfigFetch, "Interval to fetch remote configuration")
+	pflag.Int("batch-size", 100, "Batch size for processing")
 	pflag.Parse()
 
 	// Bind flags to viper

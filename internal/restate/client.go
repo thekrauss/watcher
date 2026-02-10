@@ -21,6 +21,7 @@ type IRestateClient interface {
 	Enroll(ctx context.Context) error
 	GetRemoteConfig(ctx context.Context) (*RemoteConfig, error)
 	NotifyPodEvent(ctx context.Context, event PodEvent) error
+	NotifyPodEvents(ctx context.Context, events []PodEvent) error
 }
 
 type RestateClient struct {
@@ -151,6 +152,63 @@ func (c *RestateClient) NotifyPodEvent(ctx context.Context, event PodEvent) erro
 	}
 
 	endpoint := fmt.Sprintf("%s/ProjectService/%s/onPodEvent", c.url, c.clusterID)
+	backoff := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
+
+	for attempt := 0; ; attempt++ {
+		_, cbErr := c.cb.Execute(func() (interface{}, error) {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+			if reqErr != nil {
+				return nil, reqErr
+			}
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, doErr := c.http.Do(req)
+			if doErr != nil {
+				metrics.RestateRequestsTotal.WithLabelValues("error").Inc()
+				return nil, doErr
+			}
+			defer resp.Body.Close()
+
+			metrics.RestateRequestsTotal.WithLabelValues(strconv.Itoa(resp.StatusCode)).Inc()
+
+			if resp.StatusCode >= http.StatusInternalServerError {
+				return nil, fmt.Errorf("restate server error: %d", resp.StatusCode)
+			}
+			return nil, nil
+		})
+
+		if cbErr == nil {
+			return nil
+		}
+
+		if errors.Is(cbErr, gobreaker.ErrOpenState) {
+			return fmt.Errorf("circuit breaker open: %w", cbErr)
+		}
+
+		if attempt >= len(backoff) {
+			return fmt.Errorf("failed after retries: %w", cbErr)
+		}
+
+		select {
+		case <-time.After(backoff[attempt]):
+			continue
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (c *RestateClient) NotifyPodEvents(ctx context.Context, events []PodEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	body, err := json.Marshal(events)
+	if err != nil {
+		return fmt.Errorf("marshal pod events batch: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("%s/ProjectService/%s/onPodEvents", c.url, c.clusterID)
 	backoff := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
 
 	for attempt := 0; ; attempt++ {

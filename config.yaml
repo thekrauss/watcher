@@ -1,0 +1,28 @@
+# Restate Watcher Configuration
+
+# Base URL for the Restate service (Required)
+restate_url: "http://restate:8080"
+
+# Unique identifier for this cluster (Required)
+cluster_id: "my-kubernetes-cluster"
+
+# Namespace selection mode: single | label (Default: single)
+watch_namespace_mode: "single"
+
+# Target namespace when mode=single
+watch_namespace: "default"
+
+# Namespace label selector when mode=label
+# managed_ns_label: "restate.dev/monitored=true"
+
+# HTTP listen address for health/metrics endpoints (Default: :8080)
+http_listen: ":8080"
+
+# Timeout for Restate API calls (Default: 5s)
+restate_timeout: "5s"
+
+# URL to fetch remote fleet configuration
+# remote_config_url: "http://config-server/api/v1/config"
+
+# Interval for remote sync (Default: 5m)
+remote_config_fetch: "5m"

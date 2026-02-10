@@ -18,6 +18,7 @@ The `config` package handles the application configuration using [Viper](https:/
 | `restate_timeout` | `--restate-timeout` | `RESTATE_TIMEOUT` | Timeout for Restate API calls (Default: `5s`) |
 | `remote_config_url` | `--remote-config-url` | `REMOTE_CONFIG_URL` | URL to fetch fleet configuration |
 | `remote_config_fetch`| `--remote-config-fetch`| `REMOTE_CONFIG_FETCH`| Interval for remote sync (Default: `5m`) |
+| `batch_size` | `--batch-size` | `BATCH_SIZE` | Batch size for processing (Default: `100`) |
 
 ## Usage
 
