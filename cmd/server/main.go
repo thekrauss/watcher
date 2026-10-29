@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/thekrauss/watcher/internal/auth"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -46,7 +47,23 @@ func main() {
 	ready := &atomic.Bool{}
 	go startHTTPServer(ctx, cfg.HTTPListen, ready, log)
 
-	rc := restate.NewRestateClient(cfg.RestateURL, cfg.ClusterID, cfg.RestateCallTimeout, log)
+	var authn auth.Authenticator = auth.None{}
+	switch {
+	case cfg.KeyFile != "":
+		ts, err := auth.LoadKeyFile(cfg.KeyFile, cfg.ClusterID, nil)
+		if err != nil {
+			log.Fatalw("invalid key file", "err", err)
+		}
+		authn = ts
+		log.Infow("auth: service account key file (short-lived STS tokens)")
+	case cfg.APIKey != "":
+		authn = auth.APIKey(cfg.APIKey)
+		log.Infow("auth: API key (prefer --key-file: no long-lived secret on the wire)")
+	default:
+		log.Warnw("no credentials configured — requests are sent unauthenticated " +
+			"(set --key-file / WATCHER_KEY_FILE, or --api-key / WATCHER_API_KEY)")
+	}
+	rc := restate.NewRestateClient(cfg.RestateURL, cfg.ClusterID, authn, cfg.RestateCallTimeout, log)
 
 	mgr, err := kubernetes.NewManager(cfg, rc, log)
 	if err != nil {

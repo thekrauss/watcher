@@ -12,8 +12,12 @@ import (
 
 // Config holds validated runtime settings.
 type Config struct {
-	RestateURL         string        `mapstructure:"restate_url"`
-	ClusterID          string        `mapstructure:"cluster_id"`
+	RestateURL string `mapstructure:"restate_url"`
+	ClusterID  string `mapstructure:"cluster_id"`
+	APIKey     string `mapstructure:"api_key"`
+	// KeyFile : fichier de clé du compte de service du cluster (recommandé :
+	// jetons courts du STS, aucun secret envoyé). Exclusif avec APIKey.
+	KeyFile            string        `mapstructure:"key_file"`
 	WatchNamespaceMode string        `mapstructure:"watch_namespace_mode"`
 	WatchNamespace     string        `mapstructure:"watch_namespace"`
 	ManagedNSLabel     string        `mapstructure:"managed_ns_label"`
@@ -35,6 +39,8 @@ func Load() (Config, error) {
 	// Define flags using pflag for better viper integration
 	pflag.String("restate-url", "", "Base URL for Restate service")
 	pflag.String("cluster-id", "", "Cluster identifier")
+	pflag.String("key-file", "", "Service account key file (JSON) of this cluster: short-lived STS tokens, recommended. Fallback env: WATCHER_KEY_FILE")
+	pflag.String("api-key", "", "API key for authenticating against the backend (X-API-Key header). Fallback env: WATCHER_API_KEY or API_KEY")
 	pflag.String("watch-namespace-mode", defaultWatchNamespaceMode, "Namespace selection mode: single|label")
 	pflag.String("watch-namespace", "", "Target namespace when mode=single")
 	pflag.String("managed-ns-label", "", "Namespace label selector when mode=label")
@@ -52,6 +58,10 @@ func Load() (Config, error) {
 	// Environment variables
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	viper.AutomaticEnv()
+
+	// Alias explicites pour WATCHER_API_KEY (convention K8s secret mount) et API_KEY.
+	_ = viper.BindEnv("api_key", "WATCHER_API_KEY", "API_KEY")
+	_ = viper.BindEnv("key_file", "WATCHER_KEY_FILE", "KEY_FILE")
 
 	// Config file
 	viper.SetConfigName("config")
@@ -84,6 +94,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.ClusterID == "" {
 		return errors.New("cluster_id is required")
+	}
+	if cfg.KeyFile != "" && cfg.APIKey != "" {
+		return errors.New("set either key_file or api_key, not both")
 	}
 	switch cfg.WatchNamespaceMode {
 	case "single":

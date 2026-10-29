@@ -34,6 +34,15 @@ make build
 
 The watcher is configured via `config.yaml`, environment variables, or flags. See [`internal/config/README.md`](internal/config/README.md) for details.
 
+### Authentication
+
+The watcher authenticates as its cluster's **system service account** on betorun. A credential only works for the cluster it was created for.
+
+- **Key file (recommended)**: `--key-file` / `WATCHER_KEY_FILE`. The watcher signs a short assertion with the private key and exchanges it for a 1-hour token with the betorun STS (RFC 7523). No long-lived secret ever goes over the network; tokens are refreshed 5 minutes before expiry and after any 401. With the Helm chart: create the key file in the console (Cluster keys), then `kubectl create secret generic watcher-key-file --from-file=key.json=<file>` and set `kubemanager.keyFileExistingSecret=watcher-key-file`.
+- **API key**: `--api-key` / `WATCHER_API_KEY` (`btr_live_…`), sent as `X-API-Key`.
+
+Set one or the other, not both.
+
 ## Observability
 
 - **Metrics**: Available at `:8080/metrics`

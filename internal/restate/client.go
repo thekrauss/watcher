@@ -13,6 +13,7 @@ import (
 	"github.com/sony/gobreaker"
 	"go.uber.org/zap"
 
+	"github.com/thekrauss/watcher/internal/auth"
 	"github.com/thekrauss/watcher/internal/metrics"
 )
 
@@ -26,6 +27,7 @@ type IRestateClient interface {
 type RestateClient struct {
 	url       string
 	clusterID string
+	auth      auth.Authenticator // fichier de clé (jeton STS) ou clé API
 	http      *http.Client
 	log       *zap.SugaredLogger
 	cb        *gobreaker.CircuitBreaker
@@ -62,7 +64,12 @@ type remoteConfigResponse struct {
 	EnabledReasons       []string `json:"enabled_reasons"`
 }
 
-func NewRestateClient(baseURL, clusterID string, timeout time.Duration, log *zap.SugaredLogger) *RestateClient {
+// NewRestateClient construit un client Restate-compatible ; a pose
+// l'authentification de chaque requête (auth.None en dev local).
+func NewRestateClient(baseURL, clusterID string, a auth.Authenticator, timeout time.Duration, log *zap.SugaredLogger) *RestateClient {
+	if a == nil {
+		a = auth.None{}
+	}
 	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        "restate-client",
 		MaxRequests: 5,
@@ -79,12 +86,26 @@ func NewRestateClient(baseURL, clusterID string, timeout time.Duration, log *zap
 	return &RestateClient{
 		url:       baseURL,
 		clusterID: clusterID,
+		auth:      a,
 		http: &http.Client{
 			Timeout: timeout,
 		},
 		log: log,
 		cb:  cb,
 	}
+}
+
+// errUnauthorized : identifiants refusés ; l'authentification est
+// renouvelée avant le prochain essai (jeton expiré ou clé tournée).
+var errUnauthorized = errors.New("unauthorized: check the watcher key")
+
+// checkAuth : sur 401, invalide le jeton pour que l'essai suivant en obtienne un neuf.
+func (c *RestateClient) checkAuth(resp *http.Response) error {
+	if resp.StatusCode == http.StatusUnauthorized {
+		c.auth.Invalidate()
+		return errUnauthorized
+	}
+	return nil
 }
 
 func (c *RestateClient) Enroll(ctx context.Context) error {
@@ -97,11 +118,17 @@ func (c *RestateClient) Enroll(ctx context.Context) error {
 	_, err := c.cb.Execute(func() (interface{}, error) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		if err := c.auth.Apply(ctx, req); err != nil {
+			return nil, err
+		}
 		resp, err := c.http.Do(req)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
+		if err := c.checkAuth(resp); err != nil {
+			return nil, err
+		}
 		if resp.StatusCode >= 400 {
 			return nil, fmt.Errorf("enroll failed: %d", resp.StatusCode)
 		}
@@ -115,11 +142,17 @@ func (c *RestateClient) GetRemoteConfig(ctx context.Context) (*RemoteConfig, err
 
 	result, err := c.cb.Execute(func() (interface{}, error) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err := c.auth.Apply(ctx, req); err != nil {
+			return nil, err
+		}
 		resp, err := c.http.Do(req)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
+		if err := c.checkAuth(resp); err != nil {
+			return nil, err
+		}
 
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("config fetch failed: %d", resp.StatusCode)
@@ -160,6 +193,9 @@ func (c *RestateClient) NotifyPodEvent(ctx context.Context, event PodEvent) erro
 				return nil, reqErr
 			}
 			req.Header.Set("Content-Type", "application/json")
+			if authErr := c.auth.Apply(ctx, req); authErr != nil {
+				return nil, authErr
+			}
 
 			resp, doErr := c.http.Do(req)
 			if doErr != nil {
@@ -170,6 +206,15 @@ func (c *RestateClient) NotifyPodEvent(ctx context.Context, event PodEvent) erro
 
 			metrics.RestateRequestsTotal.WithLabelValues(strconv.Itoa(resp.StatusCode)).Inc()
 
+			if err := c.checkAuth(resp); err != nil {
+				return nil, err // réessayé avec un jeton neuf
+			}
+			if resp.StatusCode == http.StatusForbidden {
+				// Clé d'un autre cluster ou rôle retiré : permanent, ne pas insister.
+				c.log.Errorw("pod event refused by backend (403): the key does not belong to this cluster",
+					"cluster_id", c.clusterID)
+				return nil, nil
+			}
 			if resp.StatusCode >= http.StatusInternalServerError {
 				return nil, fmt.Errorf("restate server error: %d", resp.StatusCode)
 			}
