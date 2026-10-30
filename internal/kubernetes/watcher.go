@@ -67,6 +67,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	go m.processor.Run(ctx)
 	go m.processor.CleanupLoop(ctx)
 	go m.configSyncLoop(ctx)
+	go m.serviceAccountKeysLoop(ctx)
 
 	if m.cfg.WatchNamespaceMode == "single" {
 		m.startNamespaceInformer(ctx, m.cfg.WatchNamespace)

@@ -2,6 +2,7 @@ package restate
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -39,5 +40,30 @@ func TestNotifyPodEvent_RetriesAfter401(t *testing.T) {
 	}
 	if hits.Load() != 2 || a.invalidated.Load() != 1 || a.applied.Load() != 2 {
 		t.Fatalf("hits=%d invalidated=%d applied=%d", hits.Load(), a.invalidated.Load(), a.applied.Load())
+	}
+}
+
+func TestReportServiceAccountKeys(t *testing.T) {
+	var got struct {
+		path string
+		body map[string]any
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.path = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&got.body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := NewRestateClient(srv.URL, "k3s-dakar", &countingAuth{}, 2*time.Second, zap.NewNop().Sugar())
+	err := c.ReportServiceAccountKeys(context.Background(), "https://kubernetes.default.svc.cluster.local",
+		json.RawMessage(`{"keys":[{"kty":"RSA","kid":"k1"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.path != "/ClusterService/k3s-dakar/ServiceAccountKeys" || got.body["issuer"] != "https://kubernetes.default.svc.cluster.local" {
+		t.Fatalf("requête : %s %v", got.path, got.body)
+	}
+	if keys := got.body["jwks"].(map[string]any)["keys"].([]any); len(keys) != 1 {
+		t.Fatalf("jwks : %v", got.body["jwks"])
 	}
 }

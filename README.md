@@ -43,6 +43,10 @@ The watcher authenticates as its cluster's **system service account** on betorun
 
 Set one or the other, not both.
 
+### Workload identity
+
+The watcher publishes its cluster's service account token signing keys (`/.well-known/openid-configuration` and `/openid/v1/jwks`, read-only RBAC) to betorun at startup, every 15 minutes when they change, and at least hourly. betorun uses them to accept the projected tokens of workloads that run as a betorun service account. Set `kubernetes.cluster_id` on the backend to this watcher's cluster ID.
+
 ## Observability
 
 - **Metrics**: Available at `:8080/metrics`

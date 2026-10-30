@@ -22,6 +22,9 @@ type IRestateClient interface {
 	Enroll(ctx context.Context) error
 	GetRemoteConfig(ctx context.Context) (*RemoteConfig, error)
 	NotifyPodEvent(ctx context.Context, event PodEvent) error
+	// ReportServiceAccountKeys : publie l'émetteur et le JWKS des jetons de
+	// comptes Kubernetes du cluster (identité des workloads betorun).
+	ReportServiceAccountKeys(ctx context.Context, issuer string, jwks json.RawMessage) error
 }
 
 type RestateClient struct {
@@ -240,4 +243,35 @@ func (c *RestateClient) NotifyPodEvent(ctx context.Context, event PodEvent) erro
 			return ctx.Err()
 		}
 	}
+}
+
+func (c *RestateClient) ReportServiceAccountKeys(ctx context.Context, issuer string, jwks json.RawMessage) error {
+	endpoint := fmt.Sprintf("%s/ClusterService/%s/ServiceAccountKeys", c.url, c.clusterID)
+	body, err := json.Marshal(map[string]any{"issuer": issuer, "jwks": jwks})
+	if err != nil {
+		return err
+	}
+	_, err = c.cb.Execute(func() (interface{}, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if err := c.auth.Apply(ctx, req); err != nil {
+			return nil, err
+		}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if err := c.checkAuth(resp); err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("report service account keys failed: %d", resp.StatusCode)
+		}
+		return nil, nil
+	})
+	return err
 }
