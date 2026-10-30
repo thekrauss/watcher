@@ -1,0 +1,40 @@
+{{- if .Values.rbac.create -}}
+# ClusterRole : permissions K8s strictes, principe du moindre privilège.
+#
+# - pods (list/watch/get)          → source des events (Phase, restartCount, reasons)
+# - namespaces (list/watch)        → découverte auto en mode label selector
+# - events (list/watch)            → fallback pour les reasons non exposées via pod.status
+# - coordination.k8s.io/leases     → leader election (1 seule instance active par cluster)
+# - découverte OIDC des comptes    → clés publiques des jetons Kubernetes, publiées
+#   de service (lecture seule)       à betorun pour l'identité des workloads
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "watcher.fullname" . }}
+  labels:
+    {{- include "watcher.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - nonResourceURLs: ["/.well-known/openid-configuration", "/openid/v1/jwks"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "watcher.fullname" . }}
+  labels:
+    {{- include "watcher.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "watcher.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "watcher.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

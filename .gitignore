@@ -1,2 +1,8 @@
 .env
-*.yaml
+# Configuration locale (lue dans ./ ou ./config/) : peut contenir des secrets.
+/config.yaml
+/config/
+# Fichiers de clé de compte de service : à stocker comme des secrets.
+key.json
+*-key.json
+*.key.json

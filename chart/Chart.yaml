@@ -1,0 +1,19 @@
+apiVersion: v2
+name: kubemanager-watcher
+description: |
+  Watcher K8s pour KubeManager — observe les pod events (CrashLoopBackOff,
+  OOMKilled, etc.) dans un cluster K3s et les remonte à l'API kubemanager
+  via HTTP (authentifié X-API-Key). Deploy 1 instance par cluster géré.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.25.0-0"
+keywords:
+  - kubemanager
+  - watcher
+  - observability
+  - caas
+sources:
+  - https://github.com/thekrauss/betorun
+maintainers:
+  - name: KubeManager Team

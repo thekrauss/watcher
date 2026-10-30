@@ -1,0 +1,38 @@
+✓ KubeManager Watcher deployed in namespace {{ .Release.Namespace }}.
+
+Cluster ID       : {{ .Values.cluster.id }}
+Kubemanager URL  : {{ .Values.kubemanager.url }}
+Watch mode       : {{ .Values.watch.mode }}
+{{- if eq .Values.watch.mode "single" }}
+Watched NS       : {{ .Values.watch.namespace }}
+{{- else }}
+NS label selector : {{ .Values.watch.namespaceLabel }}
+{{- end }}
+
+Vérifications :
+
+1. Voir les pods :
+   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. Logs du watcher (leader) :
+   kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+3. Vérifier l'enrollment côté kubemanager :
+   curl -H "Authorization: Bearer $ADMIN_JWT" \
+        $KM_URL/kmanager/v1/admin/clusters | jq .
+
+{{- if not .Values.kubemanager.apiKeyExistingSecret }}
+{{- if not .Values.kubemanager.apiKey }}
+
+⚠️  API KEY MANQUANTE : le watcher n'a pas d'API key configurée.
+   Fournis-en une via :
+     helm upgrade {{ .Release.Name }} . \
+       --set kubemanager.apiKey=$(curl -X POST .../admin/cluster-keys ... | jq -r .api_key)
+
+   OU via un Secret K8s existant :
+     kubectl -n {{ .Release.Namespace }} create secret generic watcher-api-key \
+       --from-literal=api-key=<clé>
+     helm upgrade {{ .Release.Name }} . \
+       --set kubemanager.apiKeyExistingSecret=watcher-api-key
+{{- end }}
+{{- end }}

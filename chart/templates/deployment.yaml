@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "watcher.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "watcher.labels" . | nindent 4 }}
+spec:
+  # Leader election côté app → on peut rouler N replicas, 1 seul prend la lease.
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "watcher.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "watcher.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "watcher.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      containers:
+        - name: watcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+
+          # Args : CLI flags. Tout est overridable via env (le watcher fait
+          # flags → env → config.yaml), donc on peut ne mettre que le minimum
+          # ici et passer le reste en env depuis ConfigMap/Secret au besoin.
+          args:
+            - --restate-url={{ .Values.kubemanager.url | quote }}
+            - --cluster-id={{ .Values.cluster.id | quote }}
+            - --restate-timeout={{ .Values.cluster.restateTimeout | quote }}
+            - --watch-namespace-mode={{ .Values.watch.mode | quote }}
+            {{- if eq .Values.watch.mode "single" }}
+            - --watch-namespace={{ .Values.watch.namespace | quote }}
+            {{- end }}
+            {{- if eq .Values.watch.mode "label" }}
+            - --managed-ns-label={{ .Values.watch.namespaceLabel | quote }}
+            {{- end }}
+            - --http-listen=:{{ .Values.service.port }}
+
+          # Fichier de clé (recommandé, monté en lecture seule) ou API key
+          # injectée via env depuis un Secret (external OU géré par le chart).
+          env:
+            {{- if .Values.kubemanager.keyFileExistingSecret }}
+            - name: WATCHER_KEY_FILE
+              value: /var/run/betorun/key.json
+            {{- else }}
+            - name: WATCHER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "watcher.secretName" .) .Values.kubemanager.apiKeyExistingSecret }}
+                  key:  {{ .Values.kubemanager.apiKeyExistingSecretKey }}
+            {{- end }}
+          {{- if .Values.kubemanager.keyFileExistingSecret }}
+          volumeMounts:
+            - name: betorun-key
+              mountPath: /var/run/betorun
+              readOnly: true
+          {{- end }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+
+          livenessProbe:
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.kubemanager.keyFileExistingSecret }}
+      volumes:
+        - name: betorun-key
+          secret:
+            secretName: {{ .Values.kubemanager.keyFileExistingSecret }}
+            # Lecture pour le groupe du pod (fsGroup) : le watcher tourne en non-root.
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.kubemanager.keyFileExistingSecretKey }}
+                path: key.json
+      {{- end }}

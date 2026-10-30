@@ -1,0 +1,141 @@
+## values.yaml — kubemanager-watcher
+##
+## Deploy le watcher dans le cluster que tu veux monitorer. Le watcher va :
+##   1. Enroll auprès de kubemanager (/clusters/ClusterService/Enroll)
+##   2. Fetch sa config (/clusters/ConfigService/:id/Get)
+##   3. Watch les pods + remonter les events sur /clusters/ProjectService/:id/onPodEvent
+##
+## Secrets (api_key) : JAMAIS en clair dans values.yaml en prod.
+## Utiliser `--set-file kubemanager.apiKey=/path/to/secret` ou un
+## ExternalSecrets / Vault side-car.
+
+# ── Kubemanager backend ────────────────────────────────────────────────────
+
+kubemanager:
+  # URL de l'API kubemanager (préfixe jusqu'au path /clusters inclus).
+  # Depuis le cluster du watcher, typiquement via Service interne ou DNS public.
+  url: "http://kubemanager.platform.svc.cluster.local:8080/kmanager/v1/clusters"
+
+  # Recommandé : fichier de clé du compte de service du cluster (jetons
+  # courts du STS, aucun secret longue durée sur le réseau). Créé dans la
+  # console (Clés de cluster → type « fichier de clé »), puis :
+  #   kubectl -n <ns> create secret generic watcher-key-file --from-file=key.json=<fichier>
+  # Si renseigné, l'API key ci-dessous est ignorée.
+  keyFileExistingSecret: ""
+  keyFileExistingSecretKey: "key.json"
+
+  # Sinon : API key (btr_live_…) — fournie par l'admin kubemanager via
+  # POST /kmanager/v1/admin/cluster-keys.
+  # /!\ PLACEHOLDER — override via --set ou Secret.
+  apiKey: ""
+
+  # Si apiKey est vide et apiKeyExistingSecret est fourni, le watcher lit
+  # la clé depuis ce Secret K8s existant (créé via CLI ou External Secrets).
+  apiKeyExistingSecret: ""
+  apiKeyExistingSecretKey: "api-key"
+
+cluster:
+  # Identifiant unique de ce cluster côté kubemanager. DOIT être stable —
+  # sert de clé de routage pour tous les events.
+  id: "dev-local"
+
+  # Timeout HTTP pour les calls vers kubemanager.
+  restateTimeout: "5s"
+
+# ── Scope de watch K8s ─────────────────────────────────────────────────────
+
+# mode=single  → watch un seul namespace (`namespace`)
+# mode=label   → watch tous les namespaces labelisés (`namespaceLabel`)
+watch:
+  mode: "label"
+  namespace: ""
+  # Tous les namespaces créés par kubemanager portent ce label (cf chart standard-app).
+  namespaceLabel: "kubemanager.io/managed=true"
+
+# ── Image ──────────────────────────────────────────────────────────────────
+
+image:
+  repository: ghcr.io/thekrauss/watcher
+  tag: "latest"
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# ── Replicas + Leader election ─────────────────────────────────────────────
+
+# Le watcher utilise le leader election K8s (Lease) pour garantir qu'une
+# seule instance est active à la fois dans le cluster. On peut donc rouler
+# 2 replicas pour HA (l'un prend la lease, l'autre est en standby).
+replicaCount: 2
+
+# ── Resources ──────────────────────────────────────────────────────────────
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# ── Security ───────────────────────────────────────────────────────────────
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ── RBAC ───────────────────────────────────────────────────────────────────
+
+# Le watcher a besoin de :
+#   - list+watch pods dans les namespaces ciblés (pour remonter les events)
+#   - list+watch namespaces (découverte en mode=label)
+#   - create/get/update Leases (leader election)
+rbac:
+  create: true
+
+# ── Networking ─────────────────────────────────────────────────────────────
+
+service:
+  enabled: true
+  port: 8080
+  type: ClusterIP
+
+# HTTP /healthz /readyz pour les probes.
+probes:
+  liveness:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 20
+  readiness:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# ── Observability ──────────────────────────────────────────────────────────
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
