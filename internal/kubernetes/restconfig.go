@@ -15,7 +15,7 @@ func RESTConfig() (*rest.Config, error) {
 	if err == nil {
 		return cfg, nil
 	}
-	path := os.Getenv("KUBECONFIG")
+	path := os.Getenv(envKubeconfig)
 	if path == "" {
 		return nil, fmt.Errorf("not running in a cluster and KUBECONFIG is not set: %w", err)
 	}

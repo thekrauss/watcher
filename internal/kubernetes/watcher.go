@@ -44,7 +44,7 @@ func NewManager(cfg config.Config, rc restate.IRestateClient, log *zap.SugaredLo
 		return nil, fmt.Errorf("create kubernetes client: %w", err)
 	}
 
-	processor := NewEventProcessor(rc, log, 3*time.Minute)
+	processor := NewEventProcessor(rc, log, defaultDedupCooldown)
 
 	return &Manager{
 		cfg:           cfg,
@@ -68,14 +68,14 @@ func (m *Manager) Run(ctx context.Context) error {
 	go m.configSyncLoop(ctx)
 	go m.serviceAccountKeysLoop(ctx)
 
-	if m.cfg.WatchNamespaceMode == "single" {
+	if m.cfg.WatchNamespaceMode == config.ModeSingle {
 		m.startNamespaceInformer(ctx, m.cfg.WatchNamespace)
 		<-ctx.Done()
 		return nil
 	}
 
 	// Label mode: Dynamic discovery of namespaces
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(namespaceDiscoveryPeriod)
 	defer ticker.Stop()
 
 	for {
@@ -113,7 +113,7 @@ func (m *Manager) configSyncLoop(ctx context.Context) {
 }
 
 func (m *Manager) discoverNamespaces(ctx context.Context) {
-	selector := fmt.Sprintf("%s=true", m.cfg.ManagedNSLabel)
+	selector := fmt.Sprintf(managedLabelSelectorFmt, m.cfg.ManagedNSLabel)
 	nsList, err := m.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
@@ -147,18 +147,18 @@ func (m *Manager) discoverNamespaces(ctx context.Context) {
 }
 
 func (m *Manager) startNamespaceInformer(ctx context.Context, namespace string) {
-	factory := informers.NewSharedInformerFactoryWithOptions(m.clientset, 10*time.Minute, informers.WithNamespace(namespace))
+	factory := informers.NewSharedInformerFactoryWithOptions(m.clientset, informerResync, informers.WithNamespace(namespace))
 	podInformer := factory.Core().V1().Pods().Informer()
 
 	podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			m.handlePodEvent("Added", obj)
+			m.handlePodEvent(eventAdded, obj)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			m.handlePodEvent("Modified", newObj)
+			m.handlePodEvent(eventModified, newObj)
 		},
 		DeleteFunc: func(obj interface{}) {
-			m.handlePodEvent("Deleted", obj)
+			m.handlePodEvent(eventDeleted, obj)
 		},
 	})
 
@@ -200,7 +200,7 @@ func (m *Manager) toPodEvent(eventType string, pod *corev1.Pod) restate.PodEvent
 			reason = cs.State.Terminated.Reason
 			message = cs.State.Terminated.Message
 			containerName = cs.Name
-			if reason == "Completed" {
+			if reason == reasonCompleted {
 				continue
 			}
 			break

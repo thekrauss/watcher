@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
@@ -92,14 +91,14 @@ func runWithLeaderElection(ctx context.Context, cfg config.Config, mgr kubernete
 	id = id + "-" + fmt.Sprintf("%d", os.Getpid())
 
 	// Use the namespace where the pod is running, fall back to "default"
-	ns := os.Getenv("POD_NAMESPACE")
+	ns := os.Getenv(envPodNamespace)
 	if ns == "" {
-		ns = "default"
+		ns = defaultLockNamespace
 	}
 
 	lock := &resourcelock.LeaseLock{
 		LeaseMeta: metav1.ObjectMeta{
-			Name:      "watcher-leader-lock",
+			Name:      leaderLockName,
 			Namespace: ns,
 		},
 		Client: clientset.CoordinationV1(),
@@ -111,9 +110,9 @@ func runWithLeaderElection(ctx context.Context, cfg config.Config, mgr kubernete
 	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 		Lock:            lock,
 		ReleaseOnCancel: true,
-		LeaseDuration:   15 * time.Second,
-		RenewDeadline:   10 * time.Second,
-		RetryPeriod:     2 * time.Second,
+		LeaseDuration:   leaseDuration,
+		RenewDeadline:   renewDeadline,
+		RetryPeriod:     retryPeriod,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				log.Infow("started leading, starting manager", "id", id)
@@ -139,39 +138,39 @@ func runWithLeaderElection(ctx context.Context, cfg config.Config, mgr kubernete
 func startHTTPServer(ctx context.Context, addr string, ready *atomic.Bool, log *zap.SugaredLogger) {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(pathHealthz, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write([]byte(bodyHealthy))
 	})
 
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(pathReadyz, func(w http.ResponseWriter, _ *http.Request) {
 		if !ready.Load() {
 			http.Error(w, "not leading", http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
+		_, _ = w.Write([]byte(bodyReady))
 	})
 
-	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle(pathMetrics, promhttp.Handler())
 
 	// pprof
-	mux.HandleFunc("/debug/pprof/", http.DefaultServeMux.ServeHTTP)
-	mux.HandleFunc("/debug/pprof/cmdline", http.DefaultServeMux.ServeHTTP)
-	mux.HandleFunc("/debug/pprof/profile", http.DefaultServeMux.ServeHTTP)
-	mux.HandleFunc("/debug/pprof/symbol", http.DefaultServeMux.ServeHTTP)
-	mux.HandleFunc("/debug/pprof/trace", http.DefaultServeMux.ServeHTTP)
+	mux.HandleFunc(pathPprof, http.DefaultServeMux.ServeHTTP)
+	mux.HandleFunc(pathPprofCmdline, http.DefaultServeMux.ServeHTTP)
+	mux.HandleFunc(pathPprofProfile, http.DefaultServeMux.ServeHTTP)
+	mux.HandleFunc(pathPprofSymbol, http.DefaultServeMux.ServeHTTP)
+	mux.HandleFunc(pathPprofTrace, http.DefaultServeMux.ServeHTTP)
 
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
+		ReadTimeout:  httpReadTimeout,
+		WriteTimeout: httpWriteTimeout,
 	}
 
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Warnw("http server shutdown", "err", err)

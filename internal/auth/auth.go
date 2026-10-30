@@ -30,7 +30,7 @@ func (None) Invalidate()                                {}
 type APIKey string
 
 func (k APIKey) Apply(_ context.Context, req *http.Request) error {
-	req.Header.Set("X-API-Key", string(k))
+	req.Header.Set(headerAPIKey, string(k))
 	return nil
 }
 func (APIKey) Invalidate() {}

@@ -23,7 +23,7 @@ const (
 // serviceAccountKeys : émetteur et JWKS de l'apiserver.
 func (m *Manager) serviceAccountKeys(ctx context.Context) (string, json.RawMessage, error) {
 	rest := m.clientset.Discovery().RESTClient()
-	rawDoc, err := rest.Get().AbsPath("/.well-known/openid-configuration").DoRaw(ctx)
+	rawDoc, err := rest.Get().AbsPath(oidcDiscoveryPath).DoRaw(ctx)
 	if err != nil {
 		return "", nil, fmt.Errorf("service account issuer discovery: %w", err)
 	}
@@ -33,7 +33,7 @@ func (m *Manager) serviceAccountKeys(ctx context.Context) (string, json.RawMessa
 	if err := json.Unmarshal(rawDoc, &doc); err != nil || doc.Issuer == "" {
 		return "", nil, fmt.Errorf("service account issuer discovery: no issuer")
 	}
-	jwks, err := rest.Get().AbsPath("/openid/v1/jwks").DoRaw(ctx)
+	jwks, err := rest.Get().AbsPath(oidcJWKSPath).DoRaw(ctx)
 	if err != nil {
 		return "", nil, fmt.Errorf("service account jwks: %w", err)
 	}

@@ -27,8 +27,34 @@ type Config struct {
 	RemoteConfigFetch  time.Duration `mapstructure:"remote_config_fetch"`
 }
 
+// Modes de sélection des espaces de noms surveillés.
 const (
-	defaultWatchNamespaceMode = "single"
+	// ModeSingle : un seul espace de noms (watch_namespace).
+	ModeSingle = "single"
+	// ModeLabel : tous les espaces portant le label managed_ns_label=true.
+	ModeLabel = "label"
+)
+
+// Sources de configuration (en plus des drapeaux).
+const (
+	configFileName = "config"
+	configFileType = "yaml"
+	configDirLocal = "."
+	configDirSub   = "./config"
+)
+
+// Alias des variables d'environnement des secrets montés.
+const (
+	keyAPIKey     = "api_key"
+	envAPIKey     = "WATCHER_API_KEY"
+	envAPIKeyAlt  = "API_KEY"
+	keyKeyFile    = "key_file"
+	envKeyFile    = "WATCHER_KEY_FILE"
+	envKeyFileAlt = "KEY_FILE"
+)
+
+const (
+	defaultWatchNamespaceMode = ModeSingle
 	defaultHTTPListen         = ":8080"
 	defaultRestateTimeout     = 5 * time.Second
 	defaultRemoteConfigFetch  = 5 * time.Minute
@@ -60,14 +86,14 @@ func Load() (Config, error) {
 	viper.AutomaticEnv()
 
 	// Alias explicites pour WATCHER_API_KEY (convention K8s secret mount) et API_KEY.
-	_ = viper.BindEnv("api_key", "WATCHER_API_KEY", "API_KEY")
-	_ = viper.BindEnv("key_file", "WATCHER_KEY_FILE", "KEY_FILE")
+	_ = viper.BindEnv(keyAPIKey, envAPIKey, envAPIKeyAlt)
+	_ = viper.BindEnv(keyKeyFile, envKeyFile, envKeyFileAlt)
 
 	// Config file
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath(".")
-	viper.AddConfigPath("./config")
+	viper.SetConfigName(configFileName)
+	viper.SetConfigType(configFileType)
+	viper.AddConfigPath(configDirLocal)
+	viper.AddConfigPath(configDirSub)
 
 	if err := viper.ReadInConfig(); err != nil {
 		var configFileNotFoundError viper.ConfigFileNotFoundError
@@ -113,11 +139,11 @@ func validate(cfg Config) error {
 		return errors.New("set either key_file or api_key, not both")
 	}
 	switch cfg.WatchNamespaceMode {
-	case "single":
+	case ModeSingle:
 		if cfg.WatchNamespace == "" {
 			return errors.New("watch_namespace is required when watch_namespace_mode=single")
 		}
-	case "label":
+	case ModeLabel:
 		if cfg.ManagedNSLabel == "" {
 			return errors.New("managed_ns_label is required when watch_namespace_mode=label")
 		}

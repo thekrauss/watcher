@@ -46,16 +46,16 @@ func NewEventProcessor(rc restate.IRestateClient, log *zap.SugaredLogger, cooldo
 		restateClient: rc,
 		log:           log,
 		cooldown:      cooldown,
-		batchSize:     50,
-		batchFlush:    time.Second,
-		eventChan:     make(chan restate.PodEvent, 1000),
+		batchSize:     defaultBatchSize,
+		batchFlush:    defaultBatchFlush,
+		eventChan:     make(chan restate.PodEvent, eventQueueSize),
 		enabledReasons: map[string]bool{
-			"CrashLoopBackOff":           true,
-			"ImagePullBackOff":           true,
-			"CreateContainerConfigError": true,
-			"OOMKilled":                  true,
-			"Failed":                     true,
-			"Evicted":                    true,
+			reasonCrashLoopBackOff:           true,
+			reasonImagePullBackOff:           true,
+			reasonCreateContainerConfigError: true,
+			reasonOOMKilled:                  true,
+			reasonFailed:                     true,
+			reasonEvicted:                    true,
 		},
 	}
 }
@@ -88,8 +88,8 @@ func (p *EventProcessor) ApplyRemoteConfig(cfg *restate.RemoteConfig) {
 
 func (p *EventProcessor) Process(ctx context.Context, event restate.PodEvent) {
 	// Extract metadata from labels if available
-	projectID := event.Labels["project-id"]
-	workloadID := event.Labels["workload-id"]
+	projectID := firstLabel(event.Labels, labelProjectID, legacyLabelProjectID)
+	workloadID := firstLabel(event.Labels, labelWorkloadID, legacyLabelWorkloadID)
 	if projectID != "" || workloadID != "" {
 		p.metadataMap.Store(event.Name, PodMetadata{
 			ProjectID:  projectID,
@@ -213,7 +213,7 @@ func (p *EventProcessor) shouldProcess(event restate.PodEvent) bool {
 	if p.enabledReasons[event.Reason] {
 		return true
 	}
-	if event.Phase == "Pending" && event.Reason != "" {
+	if event.Phase == phasePending && event.Reason != "" {
 		return true
 	}
 	if event.RestartCount > 0 {
@@ -223,7 +223,7 @@ func (p *EventProcessor) shouldProcess(event restate.PodEvent) bool {
 }
 
 func (p *EventProcessor) CleanupLoop(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Minute)
+	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
 	for {
@@ -242,4 +242,14 @@ func (p *EventProcessor) CleanupLoop(ctx context.Context) {
 			})
 		}
 	}
+}
+
+// firstLabel : valeur du premier label présent.
+func firstLabel(labels map[string]string, keys ...string) string {
+	for _, k := range keys {
+		if v := labels[k]; v != "" {
+			return v
+		}
+	}
+	return ""
 }

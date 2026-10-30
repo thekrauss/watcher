@@ -74,12 +74,12 @@ func NewRestateClient(baseURL, clusterID string, a auth.Authenticator, timeout t
 		a = auth.None{}
 	}
 	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:        "restate-client",
-		MaxRequests: 5,
-		Interval:    10 * time.Second,
-		Timeout:     30 * time.Second,
+		Name:        breakerName,
+		MaxRequests: breakerMaxRequests,
+		Interval:    breakerInterval,
+		Timeout:     breakerOpenTimeout,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures >= 5
+			return counts.ConsecutiveFailures >= breakerTripAfter
 		},
 		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
 			log.Warnw("Circuit Breaker state changed", "name", name, "from", from.String(), "to", to.String())
@@ -112,15 +112,15 @@ func (c *RestateClient) checkAuth(resp *http.Response) error {
 }
 
 func (c *RestateClient) Enroll(ctx context.Context) error {
-	endpoint := fmt.Sprintf("%s/ClusterService/Enroll", c.url)
+	endpoint := fmt.Sprintf(enrollEndpointFmt, c.url)
 	body, _ := json.Marshal(map[string]string{
 		"cluster_id": c.clusterID,
-		"version":    "v1.0.0",
+		"version":    agentVersion,
 	})
 
 	_, err := c.cb.Execute(func() (interface{}, error) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(headerContentType, mimeJSON)
 		if err := c.auth.Apply(ctx, req); err != nil {
 			return nil, err
 		}
@@ -141,7 +141,7 @@ func (c *RestateClient) Enroll(ctx context.Context) error {
 }
 
 func (c *RestateClient) GetRemoteConfig(ctx context.Context) (*RemoteConfig, error) {
-	endpoint := fmt.Sprintf("%s/ConfigService/%s/Get", c.url, c.clusterID)
+	endpoint := fmt.Sprintf(remoteConfigEndpointFmt, c.url, c.clusterID)
 
 	result, err := c.cb.Execute(func() (interface{}, error) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -186,8 +186,8 @@ func (c *RestateClient) NotifyPodEvent(ctx context.Context, event PodEvent) erro
 		return fmt.Errorf("marshal pod event: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/ProjectService/%s/onPodEvent", c.url, c.clusterID)
-	backoff := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
+	endpoint := fmt.Sprintf(podEventEndpointFmt, c.url, c.clusterID)
+	backoff := podEventBackoff
 
 	for attempt := 0; ; attempt++ {
 		_, cbErr := c.cb.Execute(func() (interface{}, error) {
@@ -195,7 +195,7 @@ func (c *RestateClient) NotifyPodEvent(ctx context.Context, event PodEvent) erro
 			if reqErr != nil {
 				return nil, reqErr
 			}
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(headerContentType, mimeJSON)
 			if authErr := c.auth.Apply(ctx, req); authErr != nil {
 				return nil, authErr
 			}
@@ -246,7 +246,7 @@ func (c *RestateClient) NotifyPodEvent(ctx context.Context, event PodEvent) erro
 }
 
 func (c *RestateClient) ReportServiceAccountKeys(ctx context.Context, issuer string, jwks json.RawMessage) error {
-	endpoint := fmt.Sprintf("%s/ClusterService/%s/ServiceAccountKeys", c.url, c.clusterID)
+	endpoint := fmt.Sprintf(serviceAccountKeysEndpFmt, c.url, c.clusterID)
 	body, err := json.Marshal(map[string]any{"issuer": issuer, "jwks": jwks})
 	if err != nil {
 		return err
@@ -256,7 +256,7 @@ func (c *RestateClient) ReportServiceAccountKeys(ctx context.Context, issuer str
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(headerContentType, mimeJSON)
 		if err := c.auth.Apply(ctx, req); err != nil {
 			return nil, err
 		}

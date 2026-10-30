@@ -65,7 +65,7 @@ func LoadKeyFile(path, clusterID string, client *http.Client) (*TokenSource, err
 	switch {
 	case f.Type != keyFileType:
 		return nil, fmt.Errorf("key file: type must be %q", keyFileType)
-	case f.Algorithm != "ES256":
+	case f.Algorithm != algES256:
 		return nil, fmt.Errorf("key file: unsupported algorithm %q", f.Algorithm)
 	case f.KeyID == "" || f.Principal == "" || f.TokenURI == "":
 		return nil, errors.New("key file: key_id, principal and token_uri are required")
@@ -85,7 +85,7 @@ func LoadKeyFile(path, clusterID string, client *http.Client) (*TokenSource, err
 		return nil, errors.New("key file: not an ECDSA key")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = &http.Client{Timeout: stsHTTPTimeout}
 	}
 	return &TokenSource{file: f, key: key, http: client, now: time.Now}, nil
 }
@@ -96,7 +96,7 @@ func (s *TokenSource) Apply(ctx context.Context, req *http.Request) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(headerAuthorization, bearerPrefix+tok)
 	return nil
 }
 
@@ -123,7 +123,7 @@ func (s *TokenSource) Token(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set(headerContentType, mimeFormURLEncoded)
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("sts: %w", err)
@@ -149,11 +149,11 @@ func (s *TokenSource) Token(ctx context.Context) (string, error) {
 // assertion : JWT ES256 signé avec la clé privée (RFC 7523).
 func (s *TokenSource) assertion() (string, error) {
 	now := s.now()
-	jti := make([]byte, 16)
+	jti := make([]byte, jtiBytes)
 	if _, err := rand.Read(jti); err != nil {
 		return "", err
 	}
-	header, _ := json.Marshal(map[string]string{"alg": "ES256", "typ": "JWT", "kid": s.file.KeyID})
+	header, _ := json.Marshal(map[string]string{"alg": algES256, "typ": typJWT, "kid": s.file.KeyID})
 	claims, _ := json.Marshal(map[string]any{
 		"iss": s.file.Principal, "sub": s.file.Principal, "aud": s.file.TokenURI,
 		"iat": now.Unix(), "exp": now.Add(assertionTTL).Unix(), "jti": hex.EncodeToString(jti),
@@ -166,8 +166,8 @@ func (s *TokenSource) assertion() (string, error) {
 		return "", err
 	}
 	// Signature JWS ES256 : R || S, 32 octets chacun.
-	out := make([]byte, 64)
-	r.FillBytes(out[:32])
-	sig.FillBytes(out[32:])
+	out := make([]byte, 2*es256CoordLen)
+	r.FillBytes(out[:es256CoordLen])
+	sig.FillBytes(out[es256CoordLen:])
 	return signingInput + "." + enc.EncodeToString(out), nil
 }
