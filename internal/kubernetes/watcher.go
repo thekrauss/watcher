@@ -10,7 +10,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
 	"go.uber.org/zap"
@@ -35,9 +34,9 @@ type Manager struct {
 }
 
 func NewManager(cfg config.Config, rc restate.IRestateClient, log *zap.SugaredLogger) (*Manager, error) {
-	restCfg, err := rest.InClusterConfig()
+	restCfg, err := RESTConfig()
 	if err != nil {
-		return nil, fmt.Errorf("build in-cluster config: %w", err)
+		return nil, fmt.Errorf("build kubernetes config: %w", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(restCfg)

@@ -17,7 +17,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s_client "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
@@ -75,7 +74,7 @@ func main() {
 }
 
 func runWithLeaderElection(ctx context.Context, cfg config.Config, mgr kubernetes.IWatcher, log *zap.SugaredLogger, ready *atomic.Bool) {
-	k8sCfg, err := rest.InClusterConfig()
+	k8sCfg, err := kubernetes.RESTConfig()
 	if err != nil {
 		log.Fatalw("failed to get kubernetes config", "err", err)
 	}

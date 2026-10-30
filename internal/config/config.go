@@ -51,7 +51,7 @@ func Load() (Config, error) {
 	pflag.Parse()
 
 	// Bind flags to viper
-	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
+	if err := bindFlags(viper.GetViper(), pflag.CommandLine); err != nil {
 		return Config{}, fmt.Errorf("bind flags: %w", err)
 	}
 
@@ -86,6 +86,20 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// bindFlags : chaque drapeau sous la clé de configuration correspondante
+// (--restate-url → restate_url). BindPFlags les liait sous leur nom à tirets,
+// que la structure (mapstructure restate_url…) ne lit pas : tous les drapeaux
+// étaient ignorés, seules les variables d'environnement fonctionnaient.
+func bindFlags(v *viper.Viper, fs *pflag.FlagSet) error {
+	var err error
+	fs.VisitAll(func(f *pflag.Flag) {
+		if err == nil {
+			err = v.BindPFlag(strings.ReplaceAll(f.Name, "-", "_"), f)
+		}
+	})
+	return err
 }
 
 func validate(cfg Config) error {
