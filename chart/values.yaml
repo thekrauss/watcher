@@ -49,8 +49,9 @@ cluster:
 watch:
   mode: "label"
   namespace: ""
-  # Tous les namespaces créés par kubemanager portent ce label (cf chart standard-app).
-  namespaceLabel: "kubemanager.io/managed=true"
+  # Nom du label, sans valeur : le watcher cherche <label>=true. Tous les
+  # namespaces créés par kubemanager le portent.
+  namespaceLabel: "kubemanager.io/managed"
 
 # ── Image ──────────────────────────────────────────────────────────────────
 

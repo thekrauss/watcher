@@ -42,15 +42,15 @@ spec:
           # flags → env → config.yaml), donc on peut ne mettre que le minimum
           # ici et passer le reste en env depuis ConfigMap/Secret au besoin.
           args:
-            - --restate-url={{ .Values.kubemanager.url | quote }}
-            - --cluster-id={{ .Values.cluster.id | quote }}
-            - --restate-timeout={{ .Values.cluster.restateTimeout | quote }}
-            - --watch-namespace-mode={{ .Values.watch.mode | quote }}
+            - {{ printf "--restate-url=%s" .Values.kubemanager.url | quote }}
+            - {{ printf "--cluster-id=%s" .Values.cluster.id | quote }}
+            - {{ printf "--restate-timeout=%s" .Values.cluster.restateTimeout | quote }}
+            - {{ printf "--watch-namespace-mode=%s" .Values.watch.mode | quote }}
             {{- if eq .Values.watch.mode "single" }}
-            - --watch-namespace={{ .Values.watch.namespace | quote }}
+            - {{ printf "--watch-namespace=%s" .Values.watch.namespace | quote }}
             {{- end }}
             {{- if eq .Values.watch.mode "label" }}
-            - --managed-ns-label={{ .Values.watch.namespaceLabel | quote }}
+            - {{ printf "--managed-ns-label=%s" .Values.watch.namespaceLabel | quote }}
             {{- end }}
             - --http-listen=:{{ .Values.service.port }}
 
